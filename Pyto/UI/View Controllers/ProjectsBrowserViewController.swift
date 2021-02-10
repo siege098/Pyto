@@ -63,26 +63,51 @@ class ProjectsBrowserViewController: UITableViewController, UIDocumentPickerDele
     ///
     /// - Parameters:
     ///     - url: The URL of the folder to open.
-    func open(url: URL) {
+    ///     - viewController: A View controller where the project should be presented.
+    ///     - show: If set to `true` (default), the project navigator will be shown.
+    ///
+    /// - Returns: The view controller.
+    @discardableResult func open(url: URL, viewController: UIViewController? = nil, show: Bool = true) -> UIViewController {
         
         if let i = recent.index(of: url) {
             recent.remove(at: i)
         }
         recent.insert(url, at: 0)
-        
-        let presenting = navigationController?.presentingViewController
-        
-        dismiss(animated: true) {
-            let doc = FolderDocument(fileURL: url)
-            doc.open { (_) in
-                let fileBrowser = FileBrowserViewController()
-                fileBrowser.directory = doc.fileURL
-                fileBrowser.document = doc
-                presenting?.present(UINavigationController(rootViewController: fileBrowser), animated: true, completion: nil)
                 
-                doc.browser = fileBrowser
+        _ = url.startAccessingSecurityScopedResource()
+        
+        let uiSplitVC = EditorSplitViewController.ProjectSplitViewController()
+        
+        //uiSplitVC.editor = splitVC
+        #if Xcode11
+        uiSplitVC.preferredDisplayMode = .primaryHidden
+        #else
+        uiSplitVC.preferredDisplayMode = .allVisible
+        #endif
+        uiSplitVC.view.backgroundColor = .systemBackground
+        uiSplitVC.modalPresentationStyle = .fullScreen
+        
+        let browser = FileBrowserViewController()
+        browser.directory = url
+        browser.navigationItem.largeTitleDisplayMode = .always
+        let browserNavVC = UINavigationController(rootViewController: browser)
+        browserNavVC.navigationBar.prefersLargeTitles = true
+        browserNavVC.navigationBar.sizeToFit()
+        
+        uiSplitVC.viewControllers = [browserNavVC]
+        
+        if show {
+            if let vc = viewController {
+                vc.present(uiSplitVC, animated: true, completion: nil)
+            } else {
+                let presenting = presentingViewController
+                dismiss(animated: true) {
+                    presenting?.present(uiSplitVC, animated: true, completion: nil)
+                }
             }
         }
+        
+        return uiSplitVC
     }
     
     /// Closes the View controller.
@@ -95,9 +120,18 @@ class ProjectsBrowserViewController: UITableViewController, UIDocumentPickerDele
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        DispatchQueue.global().async {
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else {
+                return
+            }
+            
             self.recent = self._recent
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                
+                guard let self = self else {
+                    return
+                }
+                
                 self.tableView.reloadData()
             }
         }
@@ -108,6 +142,15 @@ class ProjectsBrowserViewController: UITableViewController, UIDocumentPickerDele
         tableView.backgroundColor = .systemGroupedBackground
     }
     
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        let header = UIView()
+        header.backgroundColor = .clear
+        header.frame.size.height = 30
+        tableView.tableHeaderView = header
+    }
+
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         if section == 1 {
             return Localizable.ProjectsBrowser.recent
@@ -151,6 +194,7 @@ class ProjectsBrowserViewController: UITableViewController, UIDocumentPickerDele
         case IndexPath(row: 0, section: 0):
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
             cell.imageView?.image = UIImage(systemName: "arrow.up.right.square.fill")
+            cell.backgroundColor = .secondarySystemGroupedBackground
             cell.textLabel?.text = Localizable.ProjectsBrowser.open
             return cell
         default:
@@ -158,6 +202,13 @@ class ProjectsBrowserViewController: UITableViewController, UIDocumentPickerDele
                 let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
                 cell.imageView?.image = UIImage(systemName: "cube.box.fill")
                 cell.textLabel?.text = FileManager.default.displayName(atPath: recent[indexPath.row].path)
+                
+                if recent[indexPath.row].path.hasSuffix("com~apple~CloudDocs/Documents/") || recent[indexPath.row].path.hasSuffix("com~apple~CloudDocs/Desktop/") || recent[indexPath.row].path.hasSuffix("com~apple~CloudDocs/Documents") || recent[indexPath.row].path.hasSuffix("com~apple~CloudDocs/Desktop") {
+                    
+                    cell.textLabel?.text = recent[indexPath.row].lastPathComponent
+                }
+                
+                cell.backgroundColor = .secondarySystemGroupedBackground
                 return cell
             } else {
                 return UITableViewCell()

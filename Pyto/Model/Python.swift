@@ -10,6 +10,7 @@ import Foundation
 import AVFoundation
 #if MAIN
 import UIKit
+import Dynamic
 #elseif os(iOS) && !WIDGET
 @_silgen_name("PyRun_SimpleStringFlags")
 func PyRun_SimpleStringFlags(_: UnsafePointer<Int8>!, _: UnsafeMutablePointer<Any>!)
@@ -474,6 +475,15 @@ func Py_DecodeLocale(_: UnsafePointer<Int8>!, _: UnsafeMutablePointer<Int>!) -> 
                         continue
                     }
                     
+                    if isiOSAppOnMac { // Reload toolbar
+                        let toolbarItem = Dynamic(editor.runToolbarItem)
+                        
+                        toolbarItem.label = self.runningScripts.contains(scriptPath) ? Localizable.interrupt : Localizable.MenuItems.run
+                        toolbarItem.image = self.runningScripts.contains(scriptPath) ? UIImage(systemName: "xmark") : UIImage(systemName: "play")
+                        toolbarItem.target = editor
+                        toolbarItem.action = NSSelectorFromString(self.runningScripts.contains(scriptPath) ? "stop" : "run")
+                    }
+                    
                     guard !(contentVC.editorSplitViewController is REPLViewController) && !(contentVC.editorSplitViewController is RunModuleViewController) && !(contentVC.editorSplitViewController is PipInstallerViewController) else {
                         let installer = contentVC.editorSplitViewController as? PipInstallerViewController
                         installer?.done = !(self.runningScripts.contains(scriptPath))
@@ -632,6 +642,15 @@ func Py_DecodeLocale(_: UnsafePointer<Int8>!, _: UnsafeMutablePointer<Int>!) -> 
         }
     }
     
+    /// Runs a blank script.
+    @objc public func runBlankScript() {
+        guard let scriptURL = Bundle.main.url(forResource: "_blank", withExtension: "py") else {
+            return
+        }
+        
+        run(script: Script(path: scriptURL.path, debug: false, runREPL: false))
+    }
+    
     /// Run script at given URL. Will be ran with Python C API directly. Call it once!
     ///
     /// - Parameters:
@@ -676,16 +695,30 @@ func Py_DecodeLocale(_: UnsafePointer<Int8>!, _: UnsafeMutablePointer<Int>!) -> 
         scriptThreads[script] = pthread_self()
     }
     
+    @objc public func interruptInput(script: String) {
+        #if MAIN
+        PyInputHelper.userInput[script] = "<WILL INTERRUPT>"
+        #endif
+    }
+ 
     /// Sends `SystemExit`.
     ///
     /// - Parameters:
     ///     - script: The path of the script to stop.
     @objc public func stop(script: String) {
-        if let thread = scriptThreads[script] {
+        if let thread = scriptThreads[script], !Python.shared.tooMuchUsedMemory {
             scriptsAboutToExit.append(script)
+            
+            #if MAIN
+            PyInputHelper.userInput[script] = "<WILL INTERRUPT>"
+            #endif
+            
             pthread_kill(thread, SIGSEGV)
+            return
         } else if let pythonInstance = Python.pythonShared {
-            pythonInstance.performSelector(inBackground: #selector(PythonRuntime.exitScript(_:)), with: script)
+            DispatchQueue.global().async {
+                pythonInstance.performSelector(inBackground: #selector(PythonRuntime.exitScript(_:)), with: script)
+            }
         } else {
             if scriptsToExit.index(of: script) == NSNotFound {
                 scriptsToExit.add(script)

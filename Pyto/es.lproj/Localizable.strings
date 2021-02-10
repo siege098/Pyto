@@ -12,6 +12,9 @@
 /* Title of the alert for setting arguments */
 "argumentsAlert.title" = "Argumentos";
 
+/* Title of the menu bar item to install the Automator action */
+"automator.install" = "Instalar la Acción Automator";
+
 /* 'Cancel' button */
 "cancel" = "Cancelar";
 
@@ -308,6 +311,9 @@
 
 /* The 'Scripts' sidebar section */
 "sidebar.scripts" = "Scripts";
+
+/* The 'Projects' sidebar section */
+"sidebar.projects" = "Proyectos";
 
 /* 'Unindent' key command */
 "unindent" = "Sacar indentación";

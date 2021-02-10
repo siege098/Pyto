@@ -9,6 +9,8 @@
 import UIKit
 import StoreKit
 import SwiftUI
+import UniformTypeIdentifiers
+import Dynamic
 
 /// The scene delegate.
 @objc class SceneDelegate: UIResponder, UIWindowSceneDelegate {
@@ -32,14 +34,23 @@ import SwiftUI
     ///     - url: The URL to open.
     ///     - run: A boolean indicating whether the script should be executed.
     ///     - isShortcut: A boolean indicating whether the script is executed from Shortcuts.
-    func openDocument(at url: URL, run: Bool, isShortcut: Bool) {
-        _ = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { (timer) in
+    func openDocument(at url: URL, run: Bool, folder: URL?, isShortcut: Bool) {
+        
+        if #available(iOS 14.0, *), isiOSAppOnMac && documentBrowserViewController == nil {
+            window?.rootViewController = DocumentBrowserViewController(forOpening: [.pythonScript])
+        }
+        
+        _ = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { [weak self] (timer) in
+            guard let self = self else {
+                return
+            }
+            
             if let doc = self.documentBrowserViewController {
                 if run || isiOSAppOnMac {
-                    doc.openDocument(url, run: run, isShortcut: isShortcut)
+                    doc.openDocument(url, run: run, isShortcut: isShortcut, folder: folder)
                 } else {
                     doc.revealDocument(at: url, importIfNeeded: false) { (url_, _) in
-                        doc.openDocument(url_ ?? url, run: run, isShortcut: isShortcut)
+                        doc.openDocument(url_ ?? url, run: run, isShortcut: isShortcut, folder: folder)
                     }
                 }
                 timer.invalidate()
@@ -65,6 +76,8 @@ import SwiftUI
         verifyReceipt()
         #endif
         
+        window?.tintColor = ConsoleViewController.choosenTheme.tintColor
+        
         if let vc = SceneDelegate.viewControllerToShow {
             SceneDelegate.viewControllerToShow = nil
             
@@ -75,11 +88,12 @@ import SwiftUI
             window?.rootViewController = blankVC
             
             return
-        } else {
-            window?.rootViewController = DocumentBrowserViewController(forOpeningFilesWithContentTypes: ["ch.ada.python-script"])
         }
         
-        window?.tintColor = ConsoleViewController.choosenTheme.tintColor
+        if #available(iOS 14.0, *), isiOSAppOnMac {
+            window?.rootViewController = DocumentBrowserViewController(forOpening: [.pythonScript])
+        }
+        
         window?.overrideUserInterfaceStyle = ConsoleViewController.choosenTheme.userInterfaceStyle
         if let window = self.window {
             SceneDelegate.windows.append(window)
@@ -124,14 +138,14 @@ import SwiftUI
             }
         }
         
-        _ = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { (timer) in
+        _ = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { [weak self] (timer) in
             
             var otherCondition = true
             if shortcutItem.type == "REPL" {
                 otherCondition = Python.shared.isSetup
             }
             
-            if self.documentBrowserViewController != nil && otherCondition {
+            if self?.documentBrowserViewController != nil && otherCondition {
                 
                 open()
                 
@@ -161,18 +175,6 @@ import SwiftUI
     @available(iOS 13.0, *)
     func sceneDidDisconnect(_ scene: UIScene) {
         ((window?.rootViewController?.presentedViewController as? UINavigationController)?.viewControllers.first as? EditorSplitViewController)?.editor?.save()
-        
-        if window?.rootViewController?.presentedViewController == nil && isiOSAppOnMac {
-            let activity = NSUserActivity(activityType: "openWindow")
-            if let state = (window?.rootViewController as? DocumentBrowserViewController)?.sceneState {
-                do {
-                    activity.addUserInfoEntries(from: ["sceneState": try JSONEncoder().encode(state)])
-                } catch {
-                    print(error.localizedDescription)
-                }
-            }
-            UIApplication.shared.requestSceneSessionActivation(nil, userActivity: activity, options: nil, errorHandler: nil)
-        }
     }
     
     @available(iOS 13.0, *)
@@ -208,7 +210,7 @@ import SwiftUI
                 } catch {
                     NSLog("%@", error.localizedDescription)
                 }
-            } else if inputURL.host == "callback" { // I don't remember what that does hahhahah
+            } else if inputURL.host == "callback" { // I don't remember what that does hahhahah; Edit: Bruh it sets the URL received from an app using x-callback URLs.
                 PyCallbackHelper.url = inputURL.absoluteString
             } else if inputURL.host == "x-callback" { // x-callback
                 PyCallbackHelper.cancelURL = inputURL.queryParameters?["x-cancel"]
@@ -227,7 +229,7 @@ import SwiftUI
                     PyCallbackHelper.code = code
                     documentBrowserViewController.run(code: code)
                 }
-            } else if inputURL.host == "widget" { // Open script from widget
+            } else if inputURL.host == "widget" || inputURL.host == "automator" { // Open script from widget or Automator
                 guard let bookmarkString = inputURL.queryParameters?["bookmark"] else {
                     return
                 }
@@ -237,9 +239,34 @@ import SwiftUI
                         let url = try URL(resolvingBookmarkData: bookmarkData, bookmarkDataIsStale: &isStale)
                         _ = url.startAccessingSecurityScopedResource()
                         Python.shared.widgetLink = inputURL.queryParameters?["link"]
-                        _ = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false, block: { (_) in
+                        _ = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false, block: { [weak self] (_) in
                             // I THINK waiting reduces the risk of a weird exception
-                            self.openDocument(at: url, run: true, isShortcut: false)
+                            if inputURL.host == "automator" {
+                                
+                                let arguments = (inputURL.queryParameters?["arguments"] ?? "")
+                                
+                                var args: [String]
+                                
+                                do {
+                                    
+                                    if let argsData = Data(base64Encoded: arguments) {
+                                    
+                                        let json = try JSONDecoder().decode([String].self, from: argsData)
+                                    
+                                        args = json
+                                    } else {
+                                        args = arguments.components(separatedBy: " ")
+                                        ParseArgs(&args)
+                                    }
+                                } catch {
+                                    args = arguments.components(separatedBy: " ")
+                                    ParseArgs(&args)
+                                }
+                                
+                                RunShortcutsScript(at: url, arguments: args, sendOutput: false)
+                            } else {
+                                self?.openDocument(at: url, run: true, folder: nil, isShortcut: false)
+                            }
                         })
                     } catch {
                         print(error.localizedDescription)
@@ -252,13 +279,6 @@ import SwiftUI
         
         // Open script
         
-        guard let documentBrowserViewController = documentBrowserViewController else {
-            window?.rootViewController?.dismiss(animated: true, completion: {
-                self.scene(scene, openURLContexts: URLContexts)
-            })
-            return
-        }
-        
         // Ensure the URL is a file URL
         guard inputURL.isFileURL else {
             
@@ -267,7 +287,7 @@ import SwiftUI
             }
             
             // Run code passed to the URL
-            documentBrowserViewController.run(code: query)
+            documentBrowserViewController?.run(code: query)
             
             return
         }
@@ -276,13 +296,23 @@ import SwiftUI
         
         // Reveal / import the document at the URL
         
-        if !isiOSAppOnMac {
-            documentBrowserViewController.revealDocument(at: inputURL, importIfNeeded: true, completion: { (url, _) in
-                
-                documentBrowserViewController.openDocument(url ?? inputURL, run: false)
-            })
-        } else {
-            documentBrowserViewController.openDocument(inputURL, run: false)
+        openDocument(at: inputURL, run: false, folder: nil, isShortcut: false)
+    }
+    
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        if isiOSAppOnMac { // Close document browser window because we only need the panel. I can't find a pattern in this bug so I can't really file a radar :(
+            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) { [weak self] in
+                if self?.window?.rootViewController is DocumentBrowserViewController, self?.window?.rootViewController?.presentedViewController == nil {
+                    var window = Dynamic.NSApplication.sharedApplication.delegate.hostWindowForUIWindow(self?.window)
+                    
+                    if window.attachedWindow.asObject != nil && !(window.attachedWindow.asObject is Error) {
+                        window = window.attachedWindow
+                    }
+                    
+                    window.close()
+                }
+            }
         }
     }
 }
+

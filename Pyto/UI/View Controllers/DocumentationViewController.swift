@@ -99,10 +99,15 @@ class DocumentationViewController: UIViewController, WKNavigationDelegate {
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(webView)
         
-        DispatchQueue.global().async {
+        DispatchQueue.global().async { [weak self] in
+            
+            guard let self = self else {
+                return
+            }
+            
             let url = self.docsURL
-            DispatchQueue.main.async {
-                self.webView.loadFileURL(url.appendingPathComponent("html/index.html"), allowingReadAccessTo: url)
+            DispatchQueue.main.async { [weak self] in
+                self?.webView.loadFileURL(url.appendingPathComponent("html/index.html"), allowingReadAccessTo: url)
             }
         }
         
@@ -129,6 +134,8 @@ class DocumentationViewController: UIViewController, WKNavigationDelegate {
         if #available(iOS 13.0, *) {
             view.window?.windowScene?.title = Localizable.Help.documentation
         }
+        
+        setupToolbarIfNeeded(windowScene: view.window?.windowScene)
     }
     
     override func viewWillDisappear(_ animated: Bool) {
@@ -149,7 +156,11 @@ class DocumentationViewController: UIViewController, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         
         if let url = navigationAction.request.url, url.scheme == "http" || url.scheme == "https", url.host != "pyto.readthedocs.io" {
-            present(SFSafariViewController(url: url), animated: true, completion: nil)
+            if !isiOSAppOnMac {
+                present(SFSafariViewController(url: url), animated: true, completion: nil)
+            } else {
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
             decisionHandler(.cancel)
         } else {
             decisionHandler(.allow)

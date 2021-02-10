@@ -9,19 +9,18 @@
 import SwiftUI
 
 @available(iOS 14.0, *)
-fileprivate func SidebarLabel(_ text: String, systemImage: String) -> Label<Text, AnyView> {
-    return Label(
-        title: { Text(NSLocalizedString(text, comment: "")).foregroundColor(.primary) },
-        icon: { AnyView(Image(systemName: systemImage).foregroundColor(.accentColor)) }
-    )
-}
-
-@available(iOS 14.0, *)
-fileprivate func adjustBackground(_ colorScheme: ColorScheme) {
-    if ProcessInfo.processInfo.isiOSAppOnMac && colorScheme != .dark {
-        UITableView.appearance().backgroundColor = .systemBackground
+fileprivate func SidebarLabel(_ text: String, systemImage: String, selection: SelectedSection?, selected: SelectedSection?) -> Label<Text, AnyView> {
+    
+    if isiOSAppOnMac {
+        return Label(
+            title: { Text(NSLocalizedString(text, comment: "")).foregroundColor(.primary) },
+            icon: { AnyView(Image(systemName: systemImage).foregroundColor(.accentColor)) }
+        )
     } else {
-        UITableView.appearance().backgroundColor = .secondarySystemBackground
+        return Label(
+            title: { Text(NSLocalizedString(text, comment: "")) },
+            icon: { AnyView(Image(systemName: systemImage)) }
+        )
     }
 }
 
@@ -319,15 +318,22 @@ public struct SidebarNavigation: View {
                 (viewControllerStore.vc?.presentingViewController as? DocumentBrowserViewController)?.sceneState = sceneStateStore.sceneState
                 viewControllerStore.vc?.dismiss(animated: true, completion: nil)
             } label: {
-                SidebarLabel("sidebar.scripts", systemImage: "folder")
+                SidebarLabel("sidebar.scripts", systemImage: "folder", selection: nil, selected: sceneStateStore.sceneState.selection)
             }
+            
+            NavigationLink(
+                destination: ViewController(viewController: ProjectsBrowserViewController(style: .insetGrouped), viewControllerStore: viewControllerStore).link(store: currentViewStore, isStack: $stack, selection: .projects, selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
+                tag: SelectedSection.projects, selection: $sceneStateStore.sceneState.selection,
+                label: {
+                    SidebarLabel("sidebar.projects", systemImage: "shippingbox", selection: .projects, selected: sceneStateStore.sceneState.selection)
+            })
                                     
             Section(header: Text("sidebar.recent")) {
                 ForEach(recentDataSource.recentItems.reversed(), id: \.url) { item in
                     NavigationLink(
                         destination: EditorView(makeEditor: item.makeViewController, url: item.url, scene: scene, currentViewStore: currentViewStore, viewControllerStore: viewControllerStore, isStack: $stack, selection: .recent(item.url), selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
                         label: {
-                            SidebarLabel(FileManager.default.displayName(atPath: item.url.path), systemImage: "clock")
+                            SidebarLabel(FileManager.default.displayName(atPath: item.url.path), systemImage: "clock", selection: .recent(item.url), selected: sceneStateStore.sceneState.selection)
                         })
                 }
             }
@@ -338,14 +344,14 @@ public struct SidebarNavigation: View {
                     tag: SelectedSection.repl,
                     selection: $restoredSelection,
                     label: {
-                        SidebarLabel("repl", systemImage: "play")
+                        SidebarLabel("repl", systemImage: "play", selection: .repl, selected: sceneStateStore.sceneState.selection)
                 })
                 
                 NavigationLink(
                     destination: runModule.navigationBarTitleDisplayMode(.inline).link(store: currentViewStore, isStack: $stack, selection: .runModule, selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
                     tag: SelectedSection.runModule,
                     selection: $restoredSelection) {
-                    SidebarLabel("sidebar.runModule", systemImage: "doc")
+                    SidebarLabel("sidebar.runModule", systemImage: "doc", selection: .runModule, selected: sceneStateStore.sceneState.selection)
                 }
                 
                 NavigationLink(destination: pypi.onAppear {
@@ -355,13 +361,13 @@ public struct SidebarNavigation: View {
                 }.link(store: currentViewStore, isStack: $stack, selection: .pypi, selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
                 tag: SelectedSection.pypi,
                 selection: $restoredSelection) {
-                    SidebarLabel("sidebar.pypi", systemImage: "cube.box")
+                    SidebarLabel("sidebar.pypi", systemImage: "cube.box", selection: .pypi, selected: sceneStateStore.sceneState.selection)
                 }
                 
                 NavigationLink(destination: modules.link(store: currentViewStore, isStack: $stack, selection: .loadedModules, selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
                     tag: SelectedSection.loadedModules,
                     selection: $restoredSelection) {
-                    SidebarLabel("sidebar.loadedModules", systemImage: "info.circle")
+                    SidebarLabel("sidebar.loadedModules", systemImage: "info.circle", selection: .loadedModules, selected: sceneStateStore.sceneState.selection)
                 }
             }
             
@@ -373,18 +379,18 @@ public struct SidebarNavigation: View {
                 }.link(store: currentViewStore, isStack: $stack, selection: .examples, selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
                 tag: SelectedSection.examples,
                 selection: $restoredSelection) {
-                    SidebarLabel("sidebar.examples", systemImage: "bookmark")
+                    SidebarLabel("sidebar.examples", systemImage: "bookmark", selection: .examples, selected: sceneStateStore.sceneState.selection)
                 }
                 
                 NavigationLink(destination: documentation.link(store: currentViewStore, isStack: $stack, selection: .documentation, selected: $sceneStateStore.sceneState.selection, restoredSelection: $restoredSelection),
                     tag: SelectedSection.documentation,
                     selection: $restoredSelection) {
-                    SidebarLabel("help.documentation", systemImage: "book")
+                    SidebarLabel("help.documentation", systemImage: "book", selection: .documentation, selected: sceneStateStore.sceneState.selection)
                 }
             }
             
             if let footer = SidebarNavigation.footer {
-                Text(footer).font(.footnote).foregroundColor(.secondary)
+                Text(footer).font(.footnote).foregroundColor(.secondary).listRowBackground(Color.clear)
             }
         }
         .listStyle(SidebarListStyle())
@@ -394,12 +400,11 @@ public struct SidebarNavigation: View {
             navVC.modalPresentationStyle = .formSheet
             self.viewControllerStore.vc?.present(navVC, animated: true, completion: nil)
         }, label: {
-            Image(systemName: "gear")
+            Image(systemName: "gear").foregroundColor(Color(ConsoleViewController.choosenTheme.tintColor ?? UIColor.label))
         }).padding(5).hover())
         .onAppear {
-            adjustBackground(userInterfaceStyle)
-        }.onChange(of: userInterfaceStyle) { (value) in
-            adjustBackground(value)
+            UITableView.appearance(whenContainedInInstancesOf: [SidebarController.self]).backgroundColor = .secondarySystemBackground
+            UITableViewCell.appearance(whenContainedInInstancesOf: [SidebarController.self]).backgroundColor = .clear
         }
     }
     
@@ -430,7 +435,9 @@ public struct SidebarNavigation: View {
     }
         
     public var body: some View {
-                
+        
+        var _stack = false
+        
         // We don't put the if statement in the NavigationView body builder because for some reason, it behaves very, very strangely in iOS 14 beta 6. Instead, we initialize a different NavigationView.
         let navigationView: AnyView
         if let contentView = contentView, sizeClass != .compact || self.stack {
@@ -442,7 +449,8 @@ public struct SidebarNavigation: View {
             navigationView = AnyView(NavigationView {
                 contentView
             })
-        } else if sizeClass == .compact { // Nothing to show, just show the sidebar
+        } else if sizeClass == .compact || (viewControllerStore.scene?.windows.first?.frame.size != UIScreen.main.bounds.size && !isiOSAppOnMac) { // Nothing to show, just show the sidebar
+            _stack = true
             navigationView = AnyView(NavigationView {
                 sidebar
             })
@@ -453,7 +461,7 @@ public struct SidebarNavigation: View {
             })
         }
         
-        if stack {
+        if stack || _stack {
             return AnyView(navigationView.navigationViewStyle(StackNavigationViewStyle()))
         } else {
             return AnyView(navigationView.navigationViewStyle(DoubleColumnNavigationViewStyle()))

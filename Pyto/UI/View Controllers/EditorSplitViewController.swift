@@ -30,6 +30,10 @@ public class EditorSplitViewController: SplitViewController {
     /// If set to `true`, the separator between the console and the editor will be shown.
     static var shouldShowSeparator: Bool {
         get {
+            if UserDefaults.standard.value(forKey: "shouldShowSeparator") == nil {
+                UserDefaults.standard.set(true, forKey: "shouldShowSeparator")
+            }
+            
             return UserDefaults.standard.bool(forKey: "shouldShowSeparator")
         }
         
@@ -58,7 +62,7 @@ public class EditorSplitViewController: SplitViewController {
     var justShown = true
     
     /// If the script was opened in a project, the folder of the project.
-    var folder: FolderDocument?
+    var folder: URL?
     
     /// A down arrow image for dismissing keyboard.
     static var downArrow: UIImage {
@@ -88,6 +92,39 @@ public class EditorSplitViewController: SplitViewController {
             context.cgContext.addPath(path.cgPath)
             
         }).withRenderingMode(.alwaysOriginal)
+    }
+    
+    /// Kills the attached REPL.
+    func killREPL() {
+        if let path = editor?.document?.fileURL.path {
+            let code = """
+            from console import __repl_threads__, __repl_namespace__
+            from pyto import Python
+            import stopit
+            import threading
+
+            path = "\(path.replacingOccurrences(of: "\"", with: "\\\""))"
+
+            repl = path.split("/")[-1]
+            if repl in __repl_namespace__:
+                __repl_namespace__[repl] = {}
+
+            if path in __repl_threads__:
+            
+                Python.shared.interruptInputWithScript(path)
+                thread = __repl_threads__[path]
+                for tid, tobj in threading._active.items():
+                    if tobj is thread:
+                        try:
+                            stopit.async_raise(tid, SystemExit)
+                            break
+                        except Exception as e:
+                            print(e)
+                del __repl_threads__[path]
+            """
+            
+            Python.shared.run(code: code)
+        }
     }
     
     // MARK: - Key commands
@@ -208,7 +245,12 @@ public class EditorSplitViewController: SplitViewController {
             }
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now()+(animateLayouts ? 0.25 : 0), execute: {
+        DispatchQueue.main.asyncAfter(deadline: .now()+(animateLayouts ? 0.25 : 0), execute: { [weak self] in
+            
+            guard let self = self else {
+                return
+            }
+            
             self.firstChild = nil
             self.secondChild = nil
             
@@ -268,7 +310,12 @@ public class EditorSplitViewController: SplitViewController {
             }
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now()+(animateLayouts ? 0.25 : 0), execute: {
+        DispatchQueue.main.asyncAfter(deadline: .now()+(animateLayouts ? 0.25 : 0), execute: { [weak self] in
+            
+            guard let self = self else {
+                return
+            }
+            
             self.firstChild = nil
             self.secondChild = nil
             
@@ -390,10 +437,10 @@ public class EditorSplitViewController: SplitViewController {
                 firstChild = editor
                 secondChild = console
             }
-            
-            firstChild?.view.superview?.backgroundColor = view.backgroundColor
-            secondChild?.view.superview?.backgroundColor = view.backgroundColor
         }
+        
+        firstChild?.view.superview?.backgroundColor = view.backgroundColor
+        secondChild?.view.superview?.backgroundColor = view.backgroundColor
     }
     
     public override func viewDidAppear(_ animated: Bool) {
@@ -401,7 +448,7 @@ public class EditorSplitViewController: SplitViewController {
         
         becomeFirstResponder()
         
-        if #available(iOS 13.0, *) {
+        if #available(iOS 13.0, *), !(self is REPLViewController), !(self is RunModuleViewController) {
             view.window?.windowScene?.title = editor?.document?.fileURL.deletingPathExtension().lastPathComponent
         }
         
@@ -433,9 +480,15 @@ public class EditorSplitViewController: SplitViewController {
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         
-        if #available(iOS 13.0, *) {
+        if #available(iOS 13.0, *), !(self is REPLViewController), !(self is RunModuleViewController) {
             view.window?.windowScene?.title = ""
         }
+    }
+    
+    public override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        
+        killREPL()
     }
     
     public override func viewDidLayoutSubviews() {
@@ -471,6 +524,12 @@ public class EditorSplitViewController: SplitViewController {
         
         guard view != nil else {
             return
+        }
+        
+        if !isiOSAppOnMac {
+            guard view.window?.windowScene?.activationState != .background else {
+                return
+            }
         }
         
         guard presentedViewController == nil else {

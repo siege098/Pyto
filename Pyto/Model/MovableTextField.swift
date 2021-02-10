@@ -143,8 +143,8 @@ class MovableTextField: NSObject, UITextFieldDelegate {
     
     /// Shows keyboard.
     func focus() {
-        DispatchQueue.main.asyncAfter(deadline: .now()+0.25) {
-            self.textField.becomeFirstResponder()
+        DispatchQueue.main.asyncAfter(deadline: .now()+0.25) { [weak self] in
+            self?.textField.becomeFirstResponder()
         }
     }
     
@@ -235,7 +235,7 @@ class MovableTextField: NSObject, UITextFieldDelegate {
         if console?.parent is REPLViewController {
             return false
         } else {
-            return true
+            return !isiOSAppOnMac
         }
         #else
         return false
@@ -246,10 +246,18 @@ class MovableTextField: NSObject, UITextFieldDelegate {
     
     func textFieldDidBeginEditing(_ textField: UITextField) {
         console?.parent?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+        
+        if isiOSAppOnMac {
+            toolbar.frame.origin.y = (console?.view.frame.height ?? 0)-(inputAssistant.frame.height*1.75)
+        }
     }
     
     func textFieldDidEndEditing(_ textField: UITextField) {
         console?.parent?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+        
+        if isiOSAppOnMac {
+            toolbar.frame.origin.y = console?.view.frame.height ?? 0
+        }
     }
     
     func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
@@ -262,8 +270,8 @@ class MovableTextField: NSObject, UITextFieldDelegate {
             if historyIndex == -1 {
                 currentInput = (textField.text as NSString?)?.replacingCharacters(in: range, with: string)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now()+0.2) {
-                self.didChangeText?(textField.text ?? "")
+            DispatchQueue.main.asyncAfter(deadline: .now()+0.2) { [weak self] in
+                self?.didChangeText?(textField.text ?? "")
             }
         }
         

@@ -31,6 +31,8 @@ if "widget" not in os.environ:
     from types import ModuleType as Module
     import stopit
     import asyncio
+    import gc
+    from time import sleep
     from rubicon.objc import ObjCInstance
     from Foundation import NSObject
 
@@ -385,6 +387,9 @@ if "widget" not in os.environ:
         # Kill the REPL running for this script
         global __repl_threads__
         if path in __repl_threads__:
+        
+            Python.shared.interruptInputWithScript(path)
+        
             thread = __repl_threads__[path]
             for tid, tobj in threading._active.items():
                 if tobj is thread:
@@ -612,7 +617,10 @@ if "widget" not in os.environ:
         else:
             # Return the script's __dict__ for the Xcode template
             t = run()
-            if __isMainApp__():
+            
+            if Python.shared.tooMuchUsedMemory:
+                del t
+            elif __isMainApp__():
                 run_repl(t)
             else:
                 _script = t[1]
@@ -631,6 +639,9 @@ if "widget" not in os.environ:
         __clear_mods__()
 
         # time.sleep(0.2)
+
+        if Python.shared.tooMuchUsedMemory:
+            Python.shared.runBlankScript()
 
         return _script
 

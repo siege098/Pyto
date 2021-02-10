@@ -103,6 +103,7 @@ func directory(for scriptURL: URL) -> URL {
         textView.smartDashesType = .no
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
+        textView.spellCheckingType = .no
         return textView
     }()
     
@@ -125,9 +126,13 @@ func directory(for scriptURL: URL) -> URL {
             
             NotificationCenter.default.addObserver(self, selector: #selector(stateChanged(_:)), name: UIDocument.stateChangedNotification, object: document)
             
-            DispatchQueue.main.async {
-                self.view.window?.windowScene?.title = self.document?.fileURL.deletingPathExtension().lastPathComponent
+            DispatchQueue.main.async { [weak self] in
+                if !(self?.parent is REPLViewController) && !(self?.parent is RunModuleViewController) {
+                    self?.view.window?.windowScene?.title = self?.document?.fileURL.deletingPathExtension().lastPathComponent
+                }
             }
+            
+            _ = document?.fileURL.startAccessingSecurityScopedResource()
         }
     }
     
@@ -153,6 +158,9 @@ func directory(for scriptURL: URL) -> URL {
     /// The line number where an error occurred. If this value is set at `viewDidAppear(_:)`, the error will be shown and the value will be reset to `nil`.
     var lineNumberError: Int?
     
+    /// If set to true, the window will close after showing the save panel.
+    var closeAfterSaving = false
+    
     /// Arguments passed to the script.
     var args: String {
         get {
@@ -175,11 +183,16 @@ func directory(for scriptURL: URL) -> URL {
         }
         
         set {
-            func _set() {
-                guard newValue != document?.fileURL.deletingLastPathComponent() else {
-                    if (try? document?.fileURL.extendedAttribute(forName: "currentDirectory")) != nil {
+            DispatchQueue.global().async { [weak self] in
+                
+                guard let self = self else {
+                    return
+                }
+                
+                guard newValue != self.document?.fileURL.deletingLastPathComponent() else {
+                    if (try? self.document?.fileURL.extendedAttribute(forName: "currentDirectory")) != nil {
                         do {
-                            try document?.fileURL.removeExtendedAttribute(forName: "currentDirectory")
+                            try self.document?.fileURL.removeExtendedAttribute(forName: "currentDirectory")
                         } catch {
                             print(error.localizedDescription)
                         }
@@ -190,15 +203,13 @@ func directory(for scriptURL: URL) -> URL {
                 #if !SCREENSHOTS
                 if let data = try? newValue.bookmarkData() {
                     do {
-                        try document?.fileURL.setExtendedAttribute(data: data, forName: "currentDirectory")
+                        try self.document?.fileURL.setExtendedAttribute(data: data, forName: "currentDirectory")
                     } catch {
                         print(error.localizedDescription)
                     }
                 }
                 #endif
             }
-            
-            DispatchQueue.global().async(execute: _set)
         }
     }
     
@@ -210,8 +221,18 @@ func directory(for scriptURL: URL) -> URL {
         textView.contentTextView.isEditable = !(document?.documentState == .editingDisabled)
         
         if document?.documentState.contains(.inConflict) == true {
-            save { (_) in
-                self.document?.checkForConflicts(onViewController: self, completion: {
+            save { [weak self] (_) in
+                
+                guard let self = self else {
+                    return
+                }
+                
+                self.document?.checkForConflicts(onViewController: self, completion: { [weak self] in
+                    
+                    guard let self = self else {
+                        return
+                    }
+                    
                     if let doc = self.document, let data = try? Data(contentsOf: doc.fileURL) {
                         try? doc.load(fromContents: data, ofType: "public.python-script")
                         
@@ -269,6 +290,9 @@ func directory(for scriptURL: URL) -> URL {
     
     // MARK: - Bar button items
     
+    /// The Mac toolbar item for running the script.
+    var runToolbarItem: NSObject?
+    
     /// The bar button item for running script.
     var runBarButtonItem: UIBarButtonItem!
     
@@ -312,6 +336,14 @@ func directory(for scriptURL: URL) -> URL {
         
         // SwiftUI
         parent?.parent?.parent?.view.backgroundColor = theme.sourceCodeTheme.backgroundColor
+        
+        view.backgroundColor = theme.sourceCodeTheme.backgroundColor
+        parent?.view.backgroundColor = view.backgroundColor
+        
+        let firstChild = (parent as? EditorSplitViewController)?.firstChild
+        let secondChild = (parent as? EditorSplitViewController)?.secondChild
+        firstChild?.view.backgroundColor = view.backgroundColor
+        secondChild?.view.backgroundColor = view.backgroundColor
         
         let highlightrTheme = HighlightrTheme(themeString: theme.css)
         highlightrTheme.setCodeFont(EditorViewController.font.withSize(CGFloat(ThemeFontSize)))
@@ -421,7 +453,7 @@ func directory(for scriptURL: URL) -> URL {
         let space = UIBarButtonItem(barButtonSystemItem: .fixedSpace, target: nil, action: nil)
         space.width = 10
         
-        if !(parent is REPLViewController) && !(parent is PipInstallerViewController) && !(parent is RunModuleViewController) {
+        if !(parent is REPLViewController) && !(parent is PipInstallerViewController) && !(parent is RunModuleViewController) && !isiOSAppOnMac {
             parent?.navigationController?.isToolbarHidden = false
         } else {
             parent?.navigationController?.isToolbarHidden = true
@@ -566,10 +598,10 @@ func directory(for scriptURL: URL) -> URL {
             }
                         
             if Python.shared.isScriptRunning(path) || !Python.shared.isSetup {
-                _ = Timer.scheduledTimer(withTimeInterval: 1, repeats: true, block: { (timer) in
+                _ = Timer.scheduledTimer(withTimeInterval: 1, repeats: true, block: { [weak self] (timer) in
                     if !Python.shared.isScriptRunning(path) && Python.shared.isSetup {
                         timer.invalidate()
-                        self.run()
+                        self?.run()
                     }
                 })
             } else {
@@ -577,7 +609,7 @@ func directory(for scriptURL: URL) -> URL {
             }
         }
         
-        if !(parent is REPLViewController) && !(parent is PipInstallerViewController) && !(parent is RunModuleViewController) {
+        if !(parent is REPLViewController) && !(parent is PipInstallerViewController) && !(parent is RunModuleViewController) && !isiOSAppOnMac {
             parent?.navigationController?.isToolbarHidden = false
         } else {
             parent?.navigationController?.isToolbarHidden = true
@@ -587,8 +619,13 @@ func directory(for scriptURL: URL) -> URL {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         
-        DispatchQueue.main.asyncAfter(deadline: .now()+0.2) {
-            self.updateSuggestions(force: true)
+        DispatchQueue.main.asyncAfter(deadline: .now()+0.2) { [weak self] in
+            self?.updateSuggestions(force: true)
+            
+            
+            if isiOSAppOnMac {
+                self?.setup(theme: ConsoleViewController.choosenTheme)
+            }
         }
         
         textView.frame = view.safeAreaLayoutGuide.layoutFrame
@@ -621,14 +658,14 @@ func directory(for scriptURL: URL) -> URL {
             marker.backgroundColor = .clear
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now()+1) {
-            self.updateBreakpointMarkersPosition()
+        DispatchQueue.main.asyncAfter(deadline: .now()+1) { [weak self] in
+            self?.updateBreakpointMarkersPosition()
         }
         
         guard (view.frame.size != size) || (textView.contentTextView.isFirstResponder && textView.frame.height != view.safeAreaLayoutGuide.layoutFrame.height) else {
             
-            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) {
-                self.textView.frame = self.view.safeAreaLayoutGuide.layoutFrame
+            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) { [weak self] in
+                self?.textView.frame = self?.view.safeAreaLayoutGuide.layoutFrame ?? .zero
             }
             return
         }
@@ -776,6 +813,10 @@ func directory(for scriptURL: URL) -> URL {
     /// Searches for text in code.
     @objc func search() {
         
+        if (parent as? EditorSplitViewController)?.folder != nil, !textView.isFirstResponder && searchBar?.isFirstResponder != true {
+            return ((splitViewController?.viewControllers.first as? UINavigationController)?.viewControllers.last as? FileBrowserViewController)?.search() ?? ()
+        }
+        
         guard searchBar?.window == nil else {
             
             
@@ -791,8 +832,8 @@ func directory(for scriptURL: URL) -> URL {
             textView.text = text
             textView.delegate = self
             
-            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) {
-                self.textView.contentTextView.becomeFirstResponder()
+            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) { [weak self] in
+                self?.textView.contentTextView.becomeFirstResponder()
             }
             
             return
@@ -966,7 +1007,12 @@ func directory(for scriptURL: URL) -> URL {
         didSet {
             let added = buttonAdded
             buttonAdded = true
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                
+                guard let self = self else {
+                    return
+                }
+                
                 if !added {
                     let item = UIBarButtonItem(image: self.editorIcon, style: .plain, target: self, action: #selector(self.callPlugin))
                     self.parentVC?.toolbarItems?.insert(item, at: 2)
@@ -981,7 +1027,7 @@ func directory(for scriptURL: URL) -> URL {
     // MARK: - Actions
     
     /// Shows scripts to run with this script as argument.
-    @objc func showEditorScripts(_ sender: UIBarButtonItem) {
+    @objc func showEditorScripts(_ sender: Any) {
         
         class NavigationController: UINavigationController {
             
@@ -1004,26 +1050,30 @@ func directory(for scriptURL: URL) -> URL {
         save { (success) in
             
             func presentPopover() {
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
                     let tableVC = EditorActionsTableViewController(scriptURL: fileURL)
                     tableVC.editor = self
                     let vc = NavigationController(rootViewController: tableVC)
                     vc.editor = self
-                    vc.modalPresentationStyle = .popover
-                    vc.popoverPresentationController?.barButtonItem = sender
-                    vc.popoverPresentationController?.delegate = tableVC
+                    if !isiOSAppOnMac {
+                        vc.modalPresentationStyle = .popover
+                        vc.popoverPresentationController?.barButtonItem = sender as? UIBarButtonItem
+                        vc.popoverPresentationController?.delegate = tableVC
+                    } else {
+                        vc.modalPresentationStyle = .formSheet
+                    }
                     
-                    self.present(vc, animated: true, completion: nil)
+                    self?.present(vc, animated: true, completion: nil)
                 }
             }
             
             guard success else {
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
                     let alert = UIAlertController(title: Localizable.Errors.errorWrittingToScript, message: nil, preferredStyle: .alert)
                     alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: { (_) in
                         presentPopover()
                     }))
-                    self.present(alert, animated: true, completion: nil)
+                    self?.present(alert, animated: true, completion: nil)
                 }
                 return
             }
@@ -1167,8 +1217,8 @@ func directory(for scriptURL: URL) -> URL {
         if textView.contentTextView.isFirstResponder {
             textView.contentTextView.resignFirstResponder()
             
-            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) {
-                self.runScript(debug: false)
+            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) { [weak self] in
+                self?.runScript(debug: false)
             }
         } else {
             runScript(debug: false)
@@ -1182,9 +1232,9 @@ func directory(for scriptURL: URL) -> URL {
     func runScript(debug: Bool) {
         
         guard isReceiptChecked else {
-            _ = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { (timer) in
+            _ = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { [weak self] (timer) in
                 if isReceiptChecked {
-                    self.runScript(debug: debug)
+                    self?.runScript(debug: debug)
                     timer.invalidate()
                 }
             })
@@ -1233,7 +1283,12 @@ func directory(for scriptURL: URL) -> URL {
             }
         }
         
-        save { (_) in
+        save { [weak self] (_) in
+            
+            guard let self = self else {
+                return
+            }
+            
             if !(UserDefaults.standard.value(forKey: "arguments\(self.document?.fileURL.path.replacingOccurrences(of: "//", with: "/") ?? "")") is [String]) {
                 var arguments = self.args.components(separatedBy: " ")
                 parseArgs(&arguments)
@@ -1255,7 +1310,12 @@ func directory(for scriptURL: URL) -> URL {
             }
             #endif
             
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                
+                guard let self = self else {
+                    return
+                }
+                
                 if let url = self.document?.fileURL {
                     func run() {
                         if !(self.parent is REPLViewController) {
@@ -1292,7 +1352,9 @@ func directory(for scriptURL: URL) -> URL {
     }
     
     @objc func saveScript(_ sender: Any) {
-        save(completion: nil)
+        save(completion: { [weak self] _ in
+            self?.saveAsIfNeeded()
+        })
     }
     
     /// Save the document on a background queue.
@@ -1320,6 +1382,9 @@ func directory(for scriptURL: URL) -> URL {
         
         document?.text = text ?? ""
         document?.updateChangeCount(.done)
+        #if MAIN
+        setHasUnsavedChanges(isScriptInTemporaryLocation)
+        #endif
         
         if document?.documentState != UIDocument.State.editingDisabled {
             document?.save(to: document!.fileURL, for: .forOverwriting, completionHandler: completion)
@@ -1342,7 +1407,12 @@ func directory(for scriptURL: URL) -> URL {
             }
             
             self.save(completion: { (_) in
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    
+                    guard let self = self else {
+                        return
+                    }
+                    
                     self.document?.text = self.textView.text
                     self.document?.close(completionHandler: { (success) in
                         if !success {
@@ -1489,7 +1559,7 @@ func directory(for scriptURL: URL) -> URL {
     }
     
     /// Shows runtime settings.
-    @objc func showRuntimeSettings(_ sender: UIBarButtonItem) {
+    @objc func showRuntimeSettings(_ sender: Any) {
         
         guard let navVC = UIStoryboard(name: "ScriptSettingsViewController", bundle: Bundle.main).instantiateInitialViewController() as? UINavigationController else {
             return
@@ -1772,6 +1842,10 @@ func directory(for scriptURL: URL) -> URL {
     
     func textViewDidChange(_ textView: UITextView) {
         
+        #if MAIN
+        setHasUnsavedChanges(textView.text != document?.text)
+        #endif
+        
         func removeUndoAndRedo() {
             for (i, item) in (UIMenuController.shared.menuItems ?? []).enumerated() {
                 if item.action == #selector(EditorViewController.redo) || item.action == #selector(EditorViewController.undo) {
@@ -2009,7 +2083,12 @@ func directory(for scriptURL: URL) -> URL {
     /// The defintions of the scripts. Array of arrays: [["content", lineNumber]]
     @objc var definitions = NSMutableArray() {
         didSet {
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                
+                guard let self = self else {
+                    return
+                }
+                
                 if let hostC = (self.presentedViewController as? UINavigationController)?.visibleViewController as? UIHostingController<DefinitionsView> {
                     hostC.rootView.dataSource.definitions = self.definitionsList
                 }
@@ -2040,8 +2119,8 @@ func directory(for scriptURL: URL) -> URL {
     
     private var currentSuggestionIndex = -1 {
         didSet {
-            DispatchQueue.main.async {
-                self.inputAssistant.reloadData()
+            DispatchQueue.main.async { [weak self] in
+                self?.inputAssistant.reloadData()
             }
         }
     }
@@ -2094,8 +2173,8 @@ func directory(for scriptURL: URL) -> URL {
                 return
             }
             
-            DispatchQueue.main.async {
-                self.inputAssistant.reloadData()
+            DispatchQueue.main.async { [weak self] in
+                self?.inputAssistant.reloadData()
             }
         }
     }
@@ -2197,7 +2276,12 @@ func directory(for scriptURL: URL) -> URL {
                 return
             }
             
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                
+                guard let self = self else {
+                    return
+                }
+                
                 let docView = UITextView()
                 docView.textColor = .white
                 docView.font = UIFont(name: "Menlo", size: UIFont.systemFontSize)
@@ -2295,17 +2379,18 @@ func directory(for scriptURL: URL) -> URL {
         """
         
         func complete() {
-            DispatchQueue.global().async {
-                self.isCompleting = true
+            DispatchQueue.global().async { [weak self] in
+                self?.isCompleting = true
                 Python.pythonShared?.perform(#selector(PythonRuntime.runCode(_:)), with: code)
-                self.isCompleting = false
+                self?.isCompleting = false
             }
         }
         
         if isCompleting { // A timer so it doesn't block the main thread
             codeCompletionTimer?.invalidate()
-            codeCompletionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { (timer) in
-                if !self.isCompleting && timer.isValid {
+            codeCompletionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { [weak self] (timer) in
+                
+                if self?.isCompleting == false && timer.isValid {
                     complete()
                     timer.invalidate()
                 }
@@ -2349,7 +2434,12 @@ func directory(for scriptURL: URL) -> URL {
         
         textView.contentTextView.selectedRange = iDonTKnowHowToNameThisVariableButItSSomethingWithTheSelectedRangeButFromTheBeginingLikeTheEntireSelectedWordWithUnderscoresIncluded
         
-        DispatchQueue.main.asyncAfter(deadline: .now()+0.1) {
+        DispatchQueue.main.asyncAfter(deadline: .now()+0.1) { [weak self] in
+            
+            guard let self = self else {
+                return
+            }
+            
             self.textView.contentTextView.insertText(suggestion)
             if suggestion.hasSuffix("(") {
                 let range = self.textView.contentTextView.selectedRange
